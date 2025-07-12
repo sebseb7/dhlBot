@@ -166,28 +166,35 @@ bot.on('message', async (msg) => {
             
             // Only make one follow-up call after all tools are processed
             if (toolResults.length > 0) {
-                const followUpCompletion = await openai.chat.completions.create({
-                    model: process.env.OPENAI_MODEL,
-                    messages: conversation,
-                    temperature: 0.7,
-                    user: userId.toString(),
-                });
+                // Check if any tool result indicates completion (no follow-up needed)
+                const hasCompleteResult = toolResults.some(result => 
+                    result.output && result.output.startsWith('COMPLETE:')
+                );
                 
-                const followUpMessage = followUpCompletion.choices[0].message.content;
-                
-                // Add the follow-up message to conversation history
-                conversation.push({ role: 'assistant', content: followUpMessage });
-                
-                // Send follow-up message with "New Conversation" button
-                const keyboard = {
-                    reply_markup: {
-                        inline_keyboard: [[
-                            { text: '🔄 Neue Unterhaltung starten', callback_data: 'new_conversation' }
-                        ]]
-                    }
-                };
-                
-                bot.sendMessage(chatId, followUpMessage, keyboard);
+                if (!hasCompleteResult) {
+                    const followUpCompletion = await openai.chat.completions.create({
+                        model: process.env.OPENAI_MODEL,
+                        messages: conversation,
+                        temperature: 0.7,
+                        user: userId.toString(),
+                    });
+                    
+                    const followUpMessage = followUpCompletion.choices[0].message.content;
+                    
+                    // Add the follow-up message to conversation history
+                    conversation.push({ role: 'assistant', content: followUpMessage });
+                    
+                    // Send follow-up message with "New Conversation" button
+                    const keyboard = {
+                        reply_markup: {
+                            inline_keyboard: [[
+                                { text: '🔄 Neue Unterhaltung starten', callback_data: 'new_conversation' }
+                            ]]
+                        }
+                    };
+                    
+                    bot.sendMessage(chatId, followUpMessage, keyboard);
+                }
             }
         } else {
             // Regular AI response without tool calls

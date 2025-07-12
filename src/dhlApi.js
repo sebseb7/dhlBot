@@ -46,6 +46,7 @@ class DHLApi {
                 const testResponse = await axios.get(`${this.baseUrl}/parcel/de/shipping/v2/`, {
                     headers: {
                         'Authorization': `Basic ${basicAuthCredentials}`,
+                        'dhl-api-key': this.clientId,
                         'Accept': 'application/json'
                     }
                 });
@@ -66,14 +67,23 @@ class DHLApi {
     async ensureAuthenticated() {
         // If using OAuth2, check token expiry
         if (this.accessToken && Date.now() >= this.tokenExpiry) {
-            return await this.authenticate();
+            console.log('Access token expired, re-authenticating...');
+            // Clear expired token before re-authenticating
+            this.accessToken = null;
+            this.tokenExpiry = null;
         }
         
         // If no authentication credentials at all, authenticate
         if (!this.accessToken && !this.basicAuthCredentials) {
-            return await this.authenticate();
+            console.log('No authentication credentials, authenticating...');
+            const success = await this.authenticate();
+            if (!success) {
+                console.error('Authentication failed completely');
+                return false;
+            }
         }
         
+        console.log('Authentication valid');
         return true;
     }
 
@@ -273,9 +283,20 @@ class DHLApi {
             
             if (result.items && result.items.length > 0) {
                 const shipment = result.items[0];
+                
+                // Log all available identifiers for debugging
+                console.log('=== Available Shipment Identifiers ===');
+                console.log('shipmentNo:', shipment.shipmentNo);
+                console.log('sstNo:', shipment.sstNo);
+                console.log('refNo:', shipment.refNo);
+                console.log('All shipment fields:', Object.keys(shipment));
+                console.log('Full shipment object:', JSON.stringify(shipment, null, 2));
+                console.log('======================================');
+                
                 const labelResult = {
                     success: true,
-                    trackingNumber: shipment.shipmentNo || shipment.sstNo,
+                    trackingNumber: shipment.shipmentNo,
+                    referenceNumber: shipment.shipmentRefNo,
                     labelUrl: shipment.label?.url || shipment.label?.b64,
                     shipmentData: shipment
                 };
@@ -300,6 +321,168 @@ class DHLApi {
             console.error('=============================');
             
             throw new Error(`DHL Versandetikett konnte nicht erstellt werden: ${error.response?.data?.detail || error.message}`);
+        }
+    }
+
+    async getShipmentStatus(shipmentNumber) {
+        console.log('=== DEBUG: DHL Get Shipment Status ===');
+        console.log('Shipment Number:', shipmentNumber);
+        
+        try {
+            await this.ensureAuthenticated();
+            
+            const headers = {
+                'Accept': 'application/json',
+                'Accept-Language': 'de-DE'
+            };
+            
+            if (this.accessToken) {
+                headers['Authorization'] = `Bearer ${this.accessToken}`;
+            } else if (this.basicAuthCredentials) {
+                headers['Authorization'] = `Basic ${this.basicAuthCredentials}`;
+                headers['dhl-api-key'] = this.clientId;
+            }
+            
+            // Use query parameter format consistent with cancellation endpoint
+            const statusUrl = `${this.baseUrl}/parcel/de/shipping/v2/orders?shipment=${shipmentNumber}`;
+            console.log('Status URL:', statusUrl);
+            
+            const response = await axios.get(statusUrl, { headers });
+            
+            console.log('Shipment Status Response:', JSON.stringify(response.data, null, 2));
+            
+            // Handle status which might be an object or string
+            let status = 'UNKNOWN';
+            let shipmentState = 'UNKNOWN';
+            
+            // Look for status in different possible locations in the response
+            if (response.data.items && response.data.items.length > 0) {
+                const shipment = response.data.items[0];
+                status = shipment.status || shipment.shipmentStatus || 'UNKNOWN';
+                shipmentState = shipment.state || shipment.shipmentState || status;
+            } else if (response.data.status) {
+                if (typeof response.data.status === 'string') {
+                    status = response.data.status;
+                } else if (typeof response.data.status === 'object') {
+                    // Status might be an object with properties like { statusCode: 'CREATED', description: '...' }
+                    status = response.data.status.statusCode || response.data.status.code || response.data.status.value || JSON.stringify(response.data.status);
+                }
+                shipmentState = status;
+            } else {
+                // If no status found, use the HTTP status code as fallback (but this is wrong)
+                status = `HTTP_${response.status}`;
+                shipmentState = status;
+            }
+            
+            console.log('Extracted status:', status, 'Shipment state:', shipmentState, 'Types:', typeof status, typeof shipmentState);
+            const statusUpper = typeof status === 'string' ? status.toUpperCase() : 'UNKNOWN';
+            
+            return {
+                success: true,
+                data: response.data,
+                status: status,
+                state: shipmentState,
+                canCancel: status && typeof status === 'string' && !['MANIFESTED', 'DELIVERED', 'IN_TRANSIT'].includes(statusUpper)
+            };
+            
+        } catch (error) {
+            console.error('=== DEBUG: DHL Get Shipment Status Error ===');
+            console.error('Error Status:', error.response?.status);
+            console.error('Error Data:', JSON.stringify(error.response?.data, null, 2));
+            console.error('Error Message:', error.message);
+            console.error('==============================================');
+            
+            return {
+                success: false,
+                error: error.response?.data?.detail || error.message,
+                status: 'ERROR'
+            };
+        }
+    }
+
+    async cancelShipment(shipmentNumber) {
+        console.log('=== DEBUG: DHL Cancel Shipment ===');
+        console.log('Shipment Number:', shipmentNumber);
+        
+        if (!await this.ensureAuthenticated()) {
+            throw new Error('DHL API Authentifizierung fehlgeschlagen');
+        }
+        
+        try {
+            // Based on DHL API documentation, the cancellation endpoint expects the shipment reference
+            // Let's try different approaches to find the correct identifier
+            
+            // Prepare headers based on authentication method (Content-Type required even for DELETE)
+            const headers = {
+                'Content-Type': 'application/json',
+                'Accept': 'application/json',
+                'Accept-Language': 'de-DE'
+            };
+            
+            console.log('=== Step 1: Preparing cancellation request ===');
+            console.log('Authentication state:');
+            console.log('- Access Token:', this.accessToken ? 'Present' : 'None');
+            console.log('- Basic Auth Credentials:', this.basicAuthCredentials ? 'Present' : 'None');
+            console.log('- Token Expiry:', this.tokenExpiry);
+            
+            if (this.accessToken) {
+                headers['Authorization'] = `Bearer ${this.accessToken}`;
+                console.log('Using Bearer Token authentication with API key');
+            } else if (this.basicAuthCredentials) {
+                headers['Authorization'] = `Basic ${this.basicAuthCredentials}`;
+                headers['dhl-api-key'] = this.clientId; // API key required for Basic Auth
+                console.log('Using Basic Auth authentication with API key');
+            } else {
+                throw new Error('No valid authentication credentials available');
+            }
+            
+            console.log('Request Headers:', JSON.stringify(headers, null, 2));
+            
+            // The DHL API cancellation endpoint uses query parameter format: /orders?shipment={shipmentNumber}
+            console.log('=== Step 2: Sending DELETE request ===');
+            const deleteUrl = `${this.baseUrl}/parcel/de/shipping/v2/orders?shipment=${shipmentNumber}`;
+            console.log('URL:', deleteUrl);
+            console.log('Request config:', JSON.stringify({ 
+                method: 'DELETE',
+                url: deleteUrl,
+                headers: headers,
+                timeout: 30000
+            }, null, 2));
+            
+            const response = await axios.delete(deleteUrl, { headers });
+            
+            console.log('DHL API Response Status:', response.status);
+            console.log('Cancel Shipment Response:', JSON.stringify(response.data, null, 2));
+            
+            return {
+                success: true,
+                message: 'Sendung wurde erfolgreich storniert',
+                data: response.data
+            };
+            
+        } catch (error) {
+            console.error('=== DEBUG: DHL Cancel Shipment Error ===');
+            console.error('Error Status:', error.response?.status);
+            console.error('Error Data:', JSON.stringify(error.response?.data, null, 2));
+            console.error('Error Message:', error.message);
+            console.error('==========================================');
+            
+            let errorMessage = error.response?.data?.detail || error.message;
+            
+            // Provide specific error messages for common cancellation issues without making assumptions
+            if (error.response?.status === 401 || error.response?.status === 403) {
+                errorMessage = 'Berechtigung verweigert - Sendung kann nicht storniert werden';
+            } else if (error.response?.status === 404) {
+                errorMessage = 'Sendung nicht gefunden - möglicherweise bereits storniert oder ungültige Sendungsnummer';
+            } else if (error.response?.status === 409) {
+                errorMessage = 'Sendung kann nicht storniert werden - möglicherweise bereits manifestiert oder verarbeitet';
+            }
+            
+            return {
+                success: false,
+                error: errorMessage,
+                message: 'Sendung konnte nicht storniert werden'
+            };
         }
     }
 }

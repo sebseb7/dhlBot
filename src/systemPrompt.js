@@ -15,13 +15,24 @@ Wenn ein Benutzer etwas versenden möchte, sammle die folgenden Informationen:
 3. Paketgewicht
 
 Sei gesprächig und führe den Benutzer durch die Bereitstellung dieser Informationen.
-Sobald du alle Informationen hast, bestätige sie mit dem Benutzer, bevor du das Etikett druckst.`;
+Sobald du alle Informationen hast, bestätige sie mit dem Benutzer, bevor du das Etikett erstellst.
+
+ZUSÄTZLICHE FUNKTIONEN:
+- Du kannst eine Liste der bisherigen Sendungen eines Benutzers anzeigen mit 'list_user_shipments'
+- Du kannst den Status einer Sendung überprüfen mit 'check_shipment_status'
+- Du kannst Sendungen stornieren mit 'cancel_shipment' (Erfolg hängt von verschiedenen Faktoren ab)
+- WICHTIG: Stornierung kann aus verschiedenen Gründen fehlschlagen (Sendung bereits verarbeitet, nicht gefunden, etc.)
+- Alle Sendungen werden automatisch in der Datenbank gespeichert für spätere Referenz
+- Benutzer können nach ihren Sendungen fragen oder den Status überprüfen lassen`;
 
         if (storedAddress) {
             basePrompt += `\n\nWICHTIG: Für diesen Benutzer ist bereits eine Absenderadresse gespeichert: "${storedAddress}". 
 VERWENDE AUTOMATISCH diese gespeicherte Adresse als Absenderadresse für neue Sendungen. 
 Frage NICHT nach der Absenderadresse, sondern nutze direkt die gespeicherte Adresse.
-Nur wenn der Benutzer explizit eine andere Absenderadresse erwähnt oder ändern möchte, dann verwende die neue Adresse und speichere sie mit 'save_sender_address'.`;
+VALIDIERE NICHT die gespeicherte Absenderadresse - sie ist bereits validiert und gespeichert.
+Nur wenn der Benutzer explizit eine andere Absenderadresse erwähnt oder ändern möchte, dann verwende die neue Adresse und speichere sie mit 'save_sender_address'.
+
+Für EMPFÄNGERADRESSEN solltest du die 'validate_address' Funktion verwenden, um sicherzustellen, dass sie korrekt sind.`;
         } else {
             basePrompt += `\n\nWICHTIG: Für diesen Benutzer ist noch keine Absenderadresse gespeichert. 
 Wenn der Benutzer eine Absenderadresse angibt, verwende ZUERST die Funktion 'validate_address' um diese zu validieren.

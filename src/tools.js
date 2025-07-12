@@ -3,8 +3,8 @@ const tools = [
     {
         type: "function",
         function: {
-            name: "print_shipping_label",
-            description: "Drucke ein Versandetikett nach dem Sammeln und Bestätigen aller erforderlichen Informationen",
+            name: "issue_shipping_label",
+            description: "Erstelle ein Versandetikett nach dem Sammeln und Bestätigen aller erforderlichen Informationen",
             parameters: {
                 type: "object",
                 properties: {
@@ -56,6 +56,57 @@ const tools = [
                     }
                 },
                 required: ["address"]
+            }
+        }
+    },
+    {
+        type: "function",
+        function: {
+            name: "check_shipment_status",
+            description: "Überprüfe den Status einer Sendung anhand der Sendungsnummer",
+            parameters: {
+                type: "object",
+                properties: {
+                    shipment_number: {
+                        type: "string",
+                        description: "Die DHL Sendungsnummer zum Statuscheck"
+                    }
+                },
+                required: ["shipment_number"]
+            }
+        }
+    },
+    {
+        type: "function",
+        function: {
+            name: "cancel_shipment",
+            description: "Storniere eine Sendung anhand der Sendungsnummer (nur möglich wenn noch nicht manifestiert)",
+            parameters: {
+                type: "object",
+                properties: {
+                    shipment_number: {
+                        type: "string",
+                        description: "Die DHL Sendungsnummer zum Stornieren"
+                    }
+                },
+                required: ["shipment_number"]
+            }
+        }
+    },
+    {
+        type: "function",
+        function: {
+            name: "list_user_shipments",
+            description: "Zeige die letzten Sendungen des Benutzers an",
+            parameters: {
+                type: "object",
+                properties: {
+                    limit: {
+                        type: "number",
+                        description: "Anzahl der anzuzeigenden Sendungen (Standard: 10)"
+                    }
+                },
+                required: []
             }
         }
     }

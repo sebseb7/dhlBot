@@ -11,8 +11,8 @@ class ToolExecutor {
         const functionName = toolCall.function.name;
         const functionArgs = JSON.parse(toolCall.function.arguments);
         
-        if (functionName === 'print_shipping_label') {
-            return await this.handlePrintShippingLabel(toolCall, chatId, userId, functionArgs, startNewConversation);
+        if (functionName === 'issue_shipping_label') {
+            return await this.handleIssueShippingLabel(toolCall, chatId, userId, functionArgs, startNewConversation);
         }
         
         if (functionName === 'validate_address') {
@@ -23,13 +23,25 @@ class ToolExecutor {
             return await this.handleSaveSenderAddress(toolCall, chatId, userId, functionArgs, getUserConversation);
         }
         
+        if (functionName === 'check_shipment_status') {
+            return await this.handleCheckShipmentStatus(toolCall, chatId, userId, functionArgs);
+        }
+        
+        if (functionName === 'cancel_shipment') {
+            return await this.handleCancelShipment(toolCall, chatId, userId, functionArgs);
+        }
+        
+        if (functionName === 'list_user_shipments') {
+            return await this.handleListUserShipments(toolCall, chatId, userId, functionArgs);
+        }
+        
         return {
             tool_call_id: toolCall.id,
             output: "Unbekannte Funktion: " + functionName
         };
     }
 
-    async handlePrintShippingLabel(toolCall, chatId, userId, functionArgs, startNewConversation) {
+    async handleIssueShippingLabel(toolCall, chatId, userId, functionArgs, startNewConversation) {
         try {
             // Send initial processing message
             await this.bot.sendMessage(chatId, '🔄 Versandetikett wird erstellt...');
@@ -86,6 +98,22 @@ ${functionArgs.to_address}
             
             // Reset conversation after successful label creation
             await startNewConversation(userId);
+            
+            // Save shipment to database for future reference
+            try {
+                await this.database.saveShipment(
+                    userId,
+                    dhlResult.trackingNumber,
+                    dhlResult.referenceNumber,
+                    functionArgs.from_address,
+                    functionArgs.to_address,
+                    functionArgs.weight
+                );
+                console.log('Shipment saved to database:', dhlResult.trackingNumber);
+            } catch (dbError) {
+                console.error('Error saving shipment to database:', dbError);
+                // Don't fail the whole operation if database save fails
+            }
             
             // Return success message for the AI
             return {
@@ -152,10 +180,10 @@ ${functionArgs.to_address}
     async handleSaveSenderAddress(toolCall, chatId, userId, functionArgs, getUserConversation) {
         try {
             // Store the sender address permanently in database
-            await this.database.saveSenderAddress(userId, functionArgs.sender_address);
+            await this.database.saveSenderAddress(userId, functionArgs.address);
             
             // Send confirmation message
-            await this.bot.sendMessage(chatId, `✅ Absenderadresse wurde gespeichert:\n${functionArgs.sender_address}\n\nDiese Adresse wird für zukünftige Sendungen verwendet.`);
+            await this.bot.sendMessage(chatId, `✅ Absenderadresse wurde gespeichert:\n${functionArgs.address}\n\nDiese Adresse wird für zukünftige Sendungen verwendet.`);
             
             // Update the conversation with new system prompt that includes the saved address
             const conversation = await getUserConversation(userId);
@@ -165,7 +193,7 @@ ${functionArgs.to_address}
             // Debug log: Address saved
             console.log('=== DEBUG: Address Saved ===');
             console.log('User ID:', userId);
-            console.log('Saved Address:', functionArgs.sender_address);
+            console.log('Saved Address:', functionArgs.address);
             console.log('===========================');
             
             // Return success message for the AI
@@ -179,6 +207,163 @@ ${functionArgs.to_address}
             return {
                 tool_call_id: toolCall.id,
                 output: "Fehler beim Speichern der Absenderadresse."
+            };
+        }
+    }
+
+    async handleCheckShipmentStatus(toolCall, chatId, userId, functionArgs) {
+        try {
+            // Send initial processing message
+            await this.bot.sendMessage(chatId, '🔍 Überprüfe Sendungsstatus...');
+            
+            // Get shipment status from DHL API
+            const result = await this.dhlApi.getShipmentStatus(functionArgs.shipment_number);
+            
+            if (result.success) {
+                // Update status in database
+                await this.database.updateShipmentStatus(userId, functionArgs.shipment_number, result.status);
+                
+                // Format status message
+                let statusMessage = `📦 **Sendungsstatus für ${functionArgs.shipment_number}:**\n\n`;
+                statusMessage += `**Status:** ${result.status}\n`;
+                
+                if (result.state && result.state !== result.status) {
+                    statusMessage += `**Zustand:** ${result.state}\n`;
+                }
+                
+                if (result.data.trackingNumber) {
+                    statusMessage += `**Tracking:** ${result.data.trackingNumber}\n`;
+                }
+                
+                if (result.canCancel) {
+                    statusMessage += `\n✅ **Stornierung möglich**\n`;
+                    statusMessage += `Diese Sendung kann noch storniert werden.`;
+                } else {
+                    statusMessage += `\n❌ **Stornierung nicht möglich**\n`;
+                    statusMessage += `Diese Sendung kann nicht mehr storniert werden.`;
+                }
+                
+                await this.bot.sendMessage(chatId, statusMessage, { parse_mode: 'Markdown' });
+                
+                return {
+                    tool_call_id: toolCall.id,
+                    output: `Sendungsstatus erfolgreich abgerufen: ${result.status}. Stornierung ${result.canCancel ? 'möglich' : 'nicht möglich'}.`
+                };
+            } else {
+                await this.bot.sendMessage(chatId, `❌ **Fehler beim Abrufen des Sendungsstatus:**\n${result.error}`);
+                
+                return {
+                    tool_call_id: toolCall.id,
+                    output: `Fehler beim Abrufen des Sendungsstatus: ${result.error}`
+                };
+            }
+        } catch (error) {
+            console.error('Error checking shipment status:', error);
+            await this.bot.sendMessage(chatId, '❌ Fehler beim Überprüfen des Sendungsstatus.');
+            
+            return {
+                tool_call_id: toolCall.id,
+                output: "Fehler beim Überprüfen des Sendungsstatus."
+            };
+        }
+    }
+
+    async handleCancelShipment(toolCall, chatId, userId, functionArgs) {
+        try {
+            // Send initial processing message
+            await this.bot.sendMessage(chatId, '🔄 Storniere Sendung...');
+            
+            // Get shipment from database using tracking number
+            const shipment = await this.database.getShipmentByNumber(userId, functionArgs.shipment_number);
+            if (!shipment) {
+                await this.bot.sendMessage(chatId, '❌ Sendung nicht gefunden oder gehört nicht zu Ihnen.');
+                return {
+                    tool_call_id: toolCall.id,
+                    output: "Sendung nicht gefunden oder gehört nicht zum Benutzer."
+                };
+            }
+            
+            console.log('=== DEBUG: Cancellation Info ===');
+            console.log('User provided tracking number:', functionArgs.shipment_number);
+            console.log('Using tracking number for cancellation:', shipment.tracking_number);
+            console.log('================================');
+            
+            // Cancel using the tracking number (shipment number as per DHL API documentation)
+            const result = await this.dhlApi.cancelShipment(shipment.tracking_number);
+            
+            if (result.success) {
+                // Remove cancelled shipment from database
+                await this.database.deleteShipment(userId, shipment.tracking_number);
+                
+                await this.bot.sendMessage(chatId, `✅ **Sendung erfolgreich storniert**\n\n**Sendungsnummer:** ${shipment.tracking_number}\n**Status:** Storniert und aus der Datenbank entfernt`, { parse_mode: 'Markdown' });
+                
+                return {
+                    tool_call_id: toolCall.id,
+                    output: `Sendung ${shipment.tracking_number} wurde erfolgreich storniert und aus der Datenbank entfernt.`
+                };
+            } else {
+                await this.bot.sendMessage(chatId, `❌ **Fehler beim Stornieren der Sendung:**\n${result.error}`);
+                
+                return {
+                    tool_call_id: toolCall.id,
+                    output: `Fehler beim Stornieren der Sendung: ${result.error}`
+                };
+            }
+        } catch (error) {
+            console.error('Error canceling shipment:', error);
+            await this.bot.sendMessage(chatId, '❌ Fehler beim Stornieren der Sendung.');
+            
+            return {
+                tool_call_id: toolCall.id,
+                output: "Fehler beim Stornieren der Sendung."
+            };
+        }
+    }
+
+    async handleListUserShipments(toolCall, chatId, userId, functionArgs) {
+        try {
+            // Send initial processing message
+            await this.bot.sendMessage(chatId, '📋 Lade Ihre Sendungen...');
+            
+            const limit = functionArgs.limit || 10;
+            const shipments = await this.database.getUserShipments(userId, limit);
+            
+            if (shipments.length === 0) {
+                await this.bot.sendMessage(chatId, '📦 Sie haben noch keine Sendungen erstellt.');
+                            return {
+                tool_call_id: toolCall.id,
+                output: "COMPLETE: Keine Sendungen gefunden."
+            };
+            }
+            
+            // Format shipments list
+            let message = `📦 **Ihre letzten ${shipments.length} Sendungen:**\n\n`;
+            
+            for (const shipment of shipments) {
+                const date = new Date(shipment.created_at).toLocaleDateString('de-DE');
+                message += `🔹 **${shipment.tracking_number}**\n`;
+                message += `   📅 ${date}\n`;
+                message += `   📍 An: ${shipment.recipient_address.split(',')[0]}\n`;
+                message += `   ⚖️ ${shipment.weight}\n`;
+                message += `   📊 Status: ${shipment.status}\n`;
+                message += `\n`;
+            }
+            
+            message += `💡 **Tipp:** Sie können den Status einer Sendung überprüfen oder sie stornieren, indem Sie nach der Sendungsnummer fragen.`;
+            
+            await this.bot.sendMessage(chatId, message, { parse_mode: 'Markdown' });
+            
+            return {
+                tool_call_id: toolCall.id,
+                output: `COMPLETE: ${shipments.length} Sendungen für den Benutzer gefunden und angezeigt.`
+            };
+        } catch (error) {
+            console.error('Error listing user shipments:', error);
+            await this.bot.sendMessage(chatId, '❌ Fehler beim Laden der Sendungen.');
+            
+            return {
+                tool_call_id: toolCall.id,
+                output: "Fehler beim Laden der Sendungen."
             };
         }
     }
