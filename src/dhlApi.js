@@ -1,11 +1,12 @@
 const axios = require('axios');
 
 class DHLApi {
-    constructor(clientId, clientSecret, username, password, useSandbox = false) {
+    constructor(clientId, clientSecret, username, password, useSandbox = false, billingNumber = null) {
         this.clientId = clientId;
         this.clientSecret = clientSecret;
         this.username = username;
         this.password = password;
+        this.billingNumber = billingNumber;
         this.baseUrl = useSandbox ? 'https://api-sandbox.dhl.com' : 'https://api-eu.dhl.com';
         this.accessToken = null;
         this.tokenExpiry = null;
@@ -217,7 +218,7 @@ class DHLApi {
                 "profile": "STANDARD_GRUPPENPROFIL",
                 "shipments": [{
                     "product": "V01PAK",
-                    "billingNumber": process.env.DHL_BILLING_NUMBER,
+                    "billingNumber": this.billingNumber,
                     "refNo": `BOT-${Date.now()}`,
                     "shipper": {
                         "name1": sender.name,

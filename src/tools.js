@@ -109,6 +109,31 @@ const tools = [
                 required: []
             }
         }
+    },
+    {
+        type: "function",
+        function: {
+            name: "save_user_credentials",
+            description: "Speichere die DHL-Zugangsdaten eines Benutzers für die Initialisierung",
+            parameters: {
+                type: "object",
+                properties: {
+                    dhl_username: {
+                        type: "string",
+                        description: "DHL Benutzername"
+                    },
+                    dhl_password: {
+                        type: "string",
+                        description: "DHL Passwort"
+                    },
+                    dhl_billing_number: {
+                        type: "string",
+                        description: "DHL Abrechnungsnummer (Billing Number)"
+                    }
+                },
+                required: ["dhl_username", "dhl_password", "dhl_billing_number"]
+            }
+        }
     }
 ];
 

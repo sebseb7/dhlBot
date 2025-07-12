@@ -39,6 +39,23 @@ class Database {
                 console.log('Shipments table ready');
             }
         });
+        
+        // Create user credentials table
+        this.db.run(`CREATE TABLE IF NOT EXISTS user_credentials (
+            user_id INTEGER PRIMARY KEY,
+            dhl_username TEXT NOT NULL,
+            dhl_password TEXT NOT NULL,
+            dhl_billing_number TEXT NOT NULL,
+            is_initialized BOOLEAN DEFAULT 1,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        )`, (err) => {
+            if (err) {
+                console.error('Error creating user_credentials table:', err);
+            } else {
+                console.log('User credentials table ready');
+            }
+        });
     }
 
     async getSenderAddress(userId) {
@@ -135,6 +152,59 @@ class Database {
         return new Promise((resolve, reject) => {
             this.db.run(`DELETE FROM shipments WHERE user_id = ? AND tracking_number = ?`, 
                         [userId, trackingNumber], function(err) {
+                if (err) {
+                    reject(err);
+                } else {
+                    resolve(this.changes);
+                }
+            });
+        });
+    }
+
+    // User credentials methods
+    async getUserCredentials(userId) {
+        return new Promise((resolve, reject) => {
+            this.db.get('SELECT * FROM user_credentials WHERE user_id = ?', [userId], (err, row) => {
+                if (err) {
+                    reject(err);
+                } else {
+                    resolve(row || null);
+                }
+            });
+        });
+    }
+
+    async isUserInitialized(userId) {
+        return new Promise((resolve, reject) => {
+            this.db.get('SELECT is_initialized FROM user_credentials WHERE user_id = ?', [userId], (err, row) => {
+                if (err) {
+                    reject(err);
+                } else {
+                    resolve(row ? !!row.is_initialized : false);
+                }
+            });
+        });
+    }
+
+    async saveUserCredentials(userId, dhlUsername, dhlPassword, dhlBillingNumber) {
+        return new Promise((resolve, reject) => {
+            this.db.run(`INSERT OR REPLACE INTO user_credentials 
+                        (user_id, dhl_username, dhl_password, dhl_billing_number, is_initialized, updated_at) 
+                        VALUES (?, ?, ?, ?, 1, CURRENT_TIMESTAMP)`, 
+                        [userId, dhlUsername, dhlPassword, dhlBillingNumber], function(err) {
+                if (err) {
+                    reject(err);
+                } else {
+                    resolve(this.lastID);
+                }
+            });
+        });
+    }
+
+    async setUserInitialized(userId, initialized = true) {
+        return new Promise((resolve, reject) => {
+            this.db.run(`UPDATE user_credentials SET is_initialized = ?, updated_at = CURRENT_TIMESTAMP 
+                        WHERE user_id = ?`, [initialized ? 1 : 0, userId], function(err) {
                 if (err) {
                     reject(err);
                 } else {

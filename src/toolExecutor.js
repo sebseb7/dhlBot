@@ -1,10 +1,28 @@
+const DHLApi = require('./dhlApi');
+
 class ToolExecutor {
-    constructor(database, addressValidator, bot, systemPrompt, dhlApi) {
+    constructor(database, addressValidator, bot, systemPrompt) {
         this.database = database;
         this.addressValidator = addressValidator;
         this.bot = bot;
         this.systemPrompt = systemPrompt;
-        this.dhlApi = dhlApi;
+    }
+
+    // Create DHL API instance for specific user
+    async createUserDhlApi(userId) {
+        const userCredentials = await this.database.getUserCredentials(userId);
+        if (!userCredentials) {
+            throw new Error('User not initialized - no DHL credentials found');
+        }
+
+        return new DHLApi(
+            process.env.DHL_CLIENT_ID,
+            process.env.DHL_CLIENT_SECRET,
+            userCredentials.dhl_username,
+            userCredentials.dhl_password,
+            process.env.DHL_USE_SANDBOX === 'true',
+            userCredentials.dhl_billing_number
+        );
     }
 
     async executeToolCall(toolCall, chatId, userId, getUserConversation, startNewConversation) {
@@ -35,6 +53,10 @@ class ToolExecutor {
             return await this.handleListUserShipments(toolCall, chatId, userId, functionArgs);
         }
         
+        if (functionName === 'save_user_credentials') {
+            return await this.handleSaveUserCredentials(toolCall, chatId, userId, functionArgs, getUserConversation);
+        }
+        
         return {
             tool_call_id: toolCall.id,
             output: "Unbekannte Funktion: " + functionName
@@ -46,8 +68,11 @@ class ToolExecutor {
             // Send initial processing message
             await this.bot.sendMessage(chatId, '🔄 Versandetikett wird erstellt...');
             
+            // Create DHL API instance for this user
+            const userDhlApi = await this.createUserDhlApi(userId);
+            
             // Create real DHL shipping label
-            const dhlResult = await this.dhlApi.createShippingLabel(
+            const dhlResult = await userDhlApi.createShippingLabel(
                 functionArgs.from_address,
                 functionArgs.to_address,
                 functionArgs.weight
@@ -80,7 +105,7 @@ ${functionArgs.to_address}
                 // Check if it's a URL or base64 data
                 if (dhlResult.labelUrl.startsWith('http')) {
                     // It's a URL - send it directly
-                    await this.bot.sendMessage(chatId, `📄 **Versandetikett herunterladen:**\n${dhlResult.labelUrl}\n\n💡 Das Etikett ist als PDF verfügbar und kann direkt gedruckt werden.`);
+                    await this.bot.sendMessage(chatId, `📄 **Versandetikett herunterladen:**\n${dhlResult.labelUrl}\n\n💡 Das Etikett ist als PDF verfügbar und kann direkt gedruckt werden.`, { parse_mode: 'Markdown' });
                 } else {
                     // It's base64 data - convert to buffer and send as document
                     try {
@@ -95,9 +120,6 @@ ${functionArgs.to_address}
                     }
                 }
             }
-            
-            // Reset conversation after successful label creation
-            await startNewConversation(userId);
             
             // Save shipment to database for future reference
             try {
@@ -118,14 +140,14 @@ ${functionArgs.to_address}
             // Return success message for the AI
             return {
                 tool_call_id: toolCall.id,
-                output: `Versandetikett erfolgreich erstellt. DHL Sendungsnummer: ${dhlResult.trackingNumber}. Unterhaltung wurde zurückgesetzt.`
+                output: `Versandetikett erfolgreich erstellt. DHL Sendungsnummer: ${dhlResult.trackingNumber}.`
             };
             
         } catch (error) {
             console.error('Error creating DHL shipping label:', error);
             
             // Send error message to user
-            await this.bot.sendMessage(chatId, `❌ **Fehler beim Erstellen des Versandetiketts:**\n\n${error.message}\n\nBitte überprüfen Sie die Adressdaten und versuchen Sie es erneut.`);
+            await this.bot.sendMessage(chatId, `❌ **Fehler beim Erstellen des Versandetiketts:**\n\n${error.message}\n\nBitte überprüfen Sie die Adressdaten und versuchen Sie es erneut.`, { parse_mode: 'Markdown' });
             
             // Return error message for the AI
             return {
@@ -169,7 +191,7 @@ ${functionArgs.to_address}
             }
         }
         
-        await this.bot.sendMessage(chatId, responseMessage);
+        await this.bot.sendMessage(chatId, responseMessage, { parse_mode: 'Markdown' });
         
         return {
             tool_call_id: toolCall.id,
@@ -216,8 +238,11 @@ ${functionArgs.to_address}
             // Send initial processing message
             await this.bot.sendMessage(chatId, '🔍 Überprüfe Sendungsstatus...');
             
+            // Create DHL API instance for this user
+            const userDhlApi = await this.createUserDhlApi(userId);
+            
             // Get shipment status from DHL API
-            const result = await this.dhlApi.getShipmentStatus(functionArgs.shipment_number);
+            const result = await userDhlApi.getShipmentStatus(functionArgs.shipment_number);
             
             if (result.success) {
                 // Update status in database
@@ -250,7 +275,7 @@ ${functionArgs.to_address}
                     output: `Sendungsstatus erfolgreich abgerufen: ${result.status}. Stornierung ${result.canCancel ? 'möglich' : 'nicht möglich'}.`
                 };
             } else {
-                await this.bot.sendMessage(chatId, `❌ **Fehler beim Abrufen des Sendungsstatus:**\n${result.error}`);
+                await this.bot.sendMessage(chatId, `❌ **Fehler beim Abrufen des Sendungsstatus:**\n${result.error}`, { parse_mode: 'Markdown' });
                 
                 return {
                     tool_call_id: toolCall.id,
@@ -288,8 +313,11 @@ ${functionArgs.to_address}
             console.log('Using tracking number for cancellation:', shipment.tracking_number);
             console.log('================================');
             
+            // Create DHL API instance for this user
+            const userDhlApi = await this.createUserDhlApi(userId);
+            
             // Cancel using the tracking number (shipment number as per DHL API documentation)
-            const result = await this.dhlApi.cancelShipment(shipment.tracking_number);
+            const result = await userDhlApi.cancelShipment(shipment.tracking_number);
             
             if (result.success) {
                 // Remove cancelled shipment from database
@@ -302,7 +330,7 @@ ${functionArgs.to_address}
                     output: `Sendung ${shipment.tracking_number} wurde erfolgreich storniert und aus der Datenbank entfernt.`
                 };
             } else {
-                await this.bot.sendMessage(chatId, `❌ **Fehler beim Stornieren der Sendung:**\n${result.error}`);
+                await this.bot.sendMessage(chatId, `❌ **Fehler beim Stornieren der Sendung:**\n${result.error}`, { parse_mode: 'Markdown' });
                 
                 return {
                     tool_call_id: toolCall.id,
@@ -364,6 +392,51 @@ ${functionArgs.to_address}
             return {
                 tool_call_id: toolCall.id,
                 output: "Fehler beim Laden der Sendungen."
+            };
+        }
+    }
+
+    async handleSaveUserCredentials(toolCall, chatId, userId, functionArgs, getUserConversation) {
+        try {
+            // Save the DHL credentials to database
+            await this.database.saveUserCredentials(
+                userId,
+                functionArgs.dhl_username,
+                functionArgs.dhl_password,
+                functionArgs.dhl_billing_number
+            );
+            
+            // Send confirmation message
+            await this.bot.sendMessage(chatId, `✅ **DHL-Zugangsdaten erfolgreich gespeichert!**\n\n` +
+                `**Benutzername:** ${functionArgs.dhl_username}\n` +
+                `**Abrechnungsnummer:** ${functionArgs.dhl_billing_number}\n\n` +
+                `🔒 Ihre Daten wurden sicher gespeichert und werden nur für die Erstellung von Versandetiketten verwendet.\n\n` +
+                `✨ **Sie können jetzt Versandetiketten erstellen!** Sagen Sie mir einfach, dass Sie etwas versenden möchten.`, 
+                { parse_mode: 'Markdown' });
+            
+            // Update the conversation with new system prompt (now initialized)
+            const conversation = await getUserConversation(userId);
+            const updatedSystemPrompt = await this.systemPrompt.getSystemPrompt(userId);
+            conversation[0] = { role: 'system', content: updatedSystemPrompt };
+            
+            // Debug log: Credentials saved
+            console.log('=== DEBUG: User Credentials Saved ===');
+            console.log('User ID:', userId);
+            console.log('DHL Username:', functionArgs.dhl_username);
+            console.log('DHL Billing Number:', functionArgs.dhl_billing_number);
+            console.log('====================================');
+            
+            // Return success message for the AI
+            return {
+                tool_call_id: toolCall.id,
+                output: "DHL-Zugangsdaten wurden erfolgreich gespeichert. Benutzer ist jetzt initialisiert und kann Versandetiketten erstellen."
+            };
+        } catch (error) {
+            console.error('Error saving user credentials:', error);
+            await this.bot.sendMessage(chatId, '❌ Fehler beim Speichern der DHL-Zugangsdaten. Bitte versuchen Sie es erneut.');
+            return {
+                tool_call_id: toolCall.id,
+                output: "Fehler beim Speichern der DHL-Zugangsdaten."
             };
         }
     }
