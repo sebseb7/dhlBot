@@ -164,7 +164,9 @@ Haben Sie bereits ein DHL-Geschäftskonto mit Paket-Versandlizenz? 📦
 Falls ja, benötige ich:
 1️⃣ Ihren DHL-Benutzernamen
 2️⃣ Ihr DHL-Passwort
-3️⃣ Ihre DHL-Abrechnungsnummer"
+3️⃣ Ihre DHL-Abrechnungsnummer
+
+💡 **Tipp:** Sie können auch einen separaten DHL-Benutzer nur für diesen Bot erstellen, falls Sie Ihre Hauptzugangsdaten nicht teilen möchten. 🔐"
 
 Sei geduldig und hilfsbereit. Erkläre bei Bedarf, wie man ein DHL-Geschäftskonto erstellt.`;
     }
