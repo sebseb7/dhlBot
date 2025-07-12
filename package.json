@@ -1,0 +1,23 @@
+{
+  "name": "dhl-telegram-bot",
+  "version": "1.0.0",
+  "description": "Telegram bot with OpenAI integration",
+  "main": "bot.js",
+  "scripts": {
+    "start": "node bot.js",
+    "dev": "nodemon bot.js"
+  },
+  "keywords": ["telegram", "bot", "openai"],
+  "author": "",
+  "license": "0BSD",
+  "dependencies": {
+    "node-telegram-bot-api": "^0.64.0",
+    "openai": "^4.24.1",
+    "dotenv": "^16.3.1",
+    "axios": "^1.6.2",
+    "sqlite3": "^5.1.6"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.2"
+  }
+} 
